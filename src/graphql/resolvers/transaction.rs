@@ -1,4 +1,5 @@
 use crate::db::{models::Transaction, queries};
+use crate::graphql::validation::{validate_asset_code, validate_limit, validate_offset, validate_stellar_account, validate_string_field};
 use crate::handlers::ws::TransactionStatusUpdate;
 use crate::AppState;
 use async_graphql::{Context, InputObject, Object, Result, Subscription};
@@ -60,11 +61,31 @@ impl TransactionQuery {
         ctx: &Context<'_>,
         filter: Option<TransactionFilter>,
         limit: Option<i64>,
-        _offset: Option<i64>,
+        offset: Option<i64>,
     ) -> Result<Vec<Transaction>> {
         let state = ctx.data::<AppState>()?;
 
-        let txs = queries::list_transactions(&state.db, limit.unwrap_or(20), None, false).await?;
+        // Validate pagination parameters
+        let validated_limit = validate_limit(limit).map_err(|e| async_graphql::Error::new(e))?;
+        let validated_offset = validate_offset(offset).map_err(|e| async_graphql::Error::new(e))?;
+
+        // Validate filter fields if provided
+        if let Some(ref f) = filter {
+            if let Some(ref status) = f.status {
+                validate_string_field("status", status, 50)
+                    .map_err(|e| async_graphql::Error::new(e))?;
+            }
+            if let Some(ref asset_code) = f.asset_code {
+                validate_asset_code(asset_code)
+                    .map_err(|e| async_graphql::Error::new(e))?;
+            }
+            if let Some(ref account) = f.stellar_account {
+                validate_stellar_account(account)
+                    .map_err(|e| async_graphql::Error::new(e))?;
+            }
+        }
+
+        let txs = queries::list_transactions(&state.db, validated_limit as i64, Some(validated_offset as i64), false).await?;
 
         if let Some(f) = filter {
             let filtered = txs
